@@ -1,0 +1,5 @@
+- insert:
+    - id: session-rollover
+      name: dsh-session-rollover
+      config:
+        enabled: true
