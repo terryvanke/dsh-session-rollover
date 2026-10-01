@@ -50,6 +50,22 @@ describe('rollover transaction', () => {
     expect(result).toEqual({kind: 'reject'});
     expect(f.calls.create).toBe(1);
   });
+  it.each([false, true])('delegates overflow retries only when rollover fails (failure=%s)', async (failCreate) => {
+    const f = await fixture(); cleanups.push(f.cleanup);
+    const {agent} = f.makeAgent('A');
+    f.setFailCreate(failCreate);
+    const listeners = new Map<string, (...args: any[]) => any>();
+    const ctx = {...f.ctx, on: (name: string, listener: (...args: any[]) => any) => {
+      listeners.set(name, listener);
+    }} as unknown as Context;
+    apply(ctx, config());
+    let delegated = false;
+    const result = await listeners.get('agent/request-error')!({agent,
+      failure: {code: 'CONTEXT_WINDOW_EXCEEDED', message: 'prompt too long'}, signal: new AbortController().signal},
+      async () => {delegated = true; return {kind: 'retry'};});
+    expect(delegated).toBe(failCreate);
+    expect(result).toEqual(failCreate ? {kind: 'retry'} : undefined);
+  });
   it('uses the Web session controller to compose the preset and restore model and permissions', async () => {
     const f = await fixture(); cleanups.push(f.cleanup);
     const {agent} = f.makeAgent('A');

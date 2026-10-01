@@ -4,7 +4,7 @@
 
 > 为长时间运行的 DeepSeek Harness Agent 自动接力到新 Session。
 
-适配 DeepSeek Harness `0.1.7-rc.1` 的新 Session 任务接力插件。它在上下文耗尽之前创建全新 Session，保存 Markdown 与 JSON Checkpoint，并让新 Agent 自动继续任务。恢复时以实际文件系统为准。
+适配 DeepSeek Harness `0.2.0-rc.1` 和 `0.2.0-rc.2` 的新 Session 任务接力插件。它在上下文耗尽之前创建全新 Session，保存 Markdown 与 JSON Checkpoint，并让新 Agent 自动继续任务。恢复时以实际文件系统为准。
 
 这是独立的社区插件，并非 DeepSeek 官方组件。它适用于通过 DSH 接入、能提供准确上下文窗口信息的模型。GLM-5.1 的 200K 窗口只是默认配置场景；使用其他模型时，应让 Provider 报告实际窗口，或显式设置回退窗口值。插件不能直接用于 DSH 以外的所有模型运行时。
 
@@ -26,12 +26,12 @@
 
 ## 安装与启用
 
-需要 Node.js、pnpm 和 DSH `0.1.7-rc.1`。克隆仓库后运行：
+需要 Node.js `^22.19.0 || >=24.0.0`、pnpm 和 DSH `0.2.0-rc.1` 或 `0.2.0-rc.2`。克隆仓库后运行：
 
 ```powershell
 git clone https://github.com/terryvanke/dsh-session-rollover.git
 cd dsh-session-rollover
-pnpm install
+pnpm install --frozen-lockfile
 pnpm run build
 dsh plugin --profile web add .
 ```
@@ -40,11 +40,11 @@ dsh plugin --profile web add .
 
 ## 配置与 GLM 200K 推荐值
 
-默认 `context.windowTokens=200000`、软阈值 `0.65`、硬阈值 `0.72`、输出预留 `32000`、安全预留 `24000`；实际硬阈值为约 `144000` tokens。优先使用模型适配器报告的窗口和输出上限。其他配置位于 `src/config.ts`：Checkpoint 内容及重试、最大接力次数、最短间隔、工作区和模型保留、溢出回退、存储目录、日志通知。DSH profile 补丁会整体替换 `config`，自定义时应写全配置对象。
+默认 `context.windowTokens=200000`、软阈值 `0.65`、硬阈值 `0.72`、输出预留 `32000`、安全预留 `24000`；实际硬阈值为约 `144000` tokens。优先使用模型适配器报告的窗口和输出上限。其他配置位于 `src/config.ts`：Checkpoint 内容及重试、最大接力次数、最短间隔、工作区和模型保留、溢出回退、存储目录、日志通知。`includeRecentMessages` 与 `includeToolResults` 设为 `0` 时不保留对应近期记录。DSH profile 补丁会整体替换 `config`，自定义时应写全配置对象。
 
 ## Checkpoint、接力与重启恢复
 
-默认写入 `<workspace>/.dsh/rollover/<chain-id>/chain.json`，以及 `session-001.md/json` 等文件。Markdown 面向新模型；JSON 保存 Session 链、任务、文件、错误、决策和唯一下一步。采用临时文件、文件同步、重命名写入。进程重启后检查未完成事务，并复用预定目标 ID；已持久化的 Session 通过 `ctx.agents.resume()` 恢复。新 Agent 先检查 `git status`、`git diff --stat` 和关键文件，再执行下一步。
+默认写入 `<workspace>/.dsh/rollover/<chain-id>/chain.json`，以及 `session-001.md/json` 等文件。Markdown 面向新模型；JSON 保存 Session 链、任务、文件、错误、决策和唯一下一步。采用临时文件、文件同步、重命名写入。进程重启后检查未完成事务，并复用预定目标 ID；已持久化的 Session 通过 `ctx.agents.resume()` 恢复。新 Agent 先检查 `git status`、`git diff --stat` 和关键文件，再执行下一步。转交的用户消息会直接触发续跑，不再额外排队一次合成续跑消息；溢出接力成功后，旧 Session 不再重试模型请求。
 
 ## 与官方 Compaction 协同
 
@@ -56,7 +56,7 @@ dsh plugin --profile web add .
 - Web 路径通过公开 Session Controller 组合 Agent 预设，并恢复模型选择和具名权限预设；任意自定义 Agent setup 回调无法通用复制，`custom` 权限状态会停止接力。运行中的一次性子 Agent 无法通过公开 Agent API 重新接回父工具结果，插件会跳过这类 Session，由官方 compaction 继续处理；要实现自动接力仍需专用子 Agent 集成。
 - 确定性回退使用当前版本已标记 deprecated 的 `Session.snapshotEvents()`；后续迁移到 session-query。
 - 重启能避免重复创建目标 Session；极端时序下可能重复排队一次 continuation。新 Agent 必须核对真实文件状态。
-- E2E 测试使用模拟 Agent，不调用真实 GLM。
+- E2E 测试覆盖真实 Cordis、Agent 循环、Session 存储和 token meter，模型响应由本地测试适配器提供；另有模拟多 Session 接力测试，不调用真实 GLM。
 - 如出现 `patch: entry ... not found`，检查 Web profile 的旧补丁 ID；如插件未激活，检查 `dsh.bundle` 和 `--dump-config`。
 
 ## 开发与测试

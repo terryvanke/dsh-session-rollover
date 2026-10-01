@@ -4,7 +4,7 @@ English | [简体中文](README.zh.md)
 
 > Automatic session handoff for long-running DeepSeek Harness agents.
 
-Fresh-session task handoff for DeepSeek Harness `0.1.7-rc.1`. It creates a new session before context pressure exhausts the model window, stores a task checkpoint as Markdown and JSON, and queues continuation on the new agent. The existing workspace remains the source of truth.
+Fresh-session task handoff for DeepSeek Harness `0.2.0-rc.1` and `0.2.0-rc.2`. It creates a new session before context pressure exhausts the model window, stores a task checkpoint as Markdown and JSON, and queues continuation on the new agent. The existing workspace remains the source of truth.
 
 This is an independent community plugin, not an official DeepSeek component. It works with models routed through DSH when the provider exposes a usable context window. GLM-5.1 with a 200K window is the default scenario; other model routes should report their actual window or set the fallback capacity explicitly. It is not a universal adapter for models outside DSH.
 
@@ -24,18 +24,18 @@ Normal compaction reduces old conversation history inside the same session. A lo
 
 `ContextMonitor → RolloverPolicy → CheckpointGenerator → CheckpointStore → SessionRolloverManager → FreshSessionCreator → CheckpointInjector → AutoResumeManager`
 
-At `agent/pre-step`, the official token meter measures the durable request surface. The plugin adds newly claimed messages and applies soft and hard thresholds. The hard limit is `min(floor(window × hardRatio), window − outputReserve − safetyReserve)`. At the hard limit, the old request is rejected. A per-session lock admits one transaction. A deterministic checkpoint is written first; optional LLM refinement follows. After atomic file writes, Web uses its public `sessionController.create()` path, which internally composes the preset and calls `ctx.agents.create()`. Other runtimes use `ctx.agents.create()` directly. Neither path seeds old history. The new agent receives the checkpoint via `inject()` and continuation via `followup()`. `agent/request-error` triggers emergency handoff on context overflow. The official compaction plugin remains in place.
+At `agent/pre-step`, the official token meter measures the durable request surface. The plugin adds newly claimed messages and applies soft and hard thresholds. The hard limit is `min(floor(window × hardRatio), window − outputReserve − safetyReserve)`. At the hard limit, the old request is rejected. A per-session lock admits one transaction. A deterministic checkpoint is written first; optional LLM refinement follows. After atomic file writes, Web uses its public `sessionController.create()` path, which internally composes the preset and calls `ctx.agents.create()`. Other runtimes use `ctx.agents.create()` directly. Neither path seeds old history. The new agent receives the checkpoint via `inject()` and continuation via `followup()`. Transferred user input starts continuation without an extra synthetic turn. `agent/request-error` triggers emergency handoff on context overflow; a successful handoff stops retries in the retired session. The official compaction plugin remains in place.
 
 Transaction states are `NORMAL`, `ARMED`, `CHECKPOINTING`, `ROLLOVER_PENDING`, `CREATING_SESSION`, `RESUMING`, `COMPLETED`, `FAILED`, and `EMERGENCY_ROLLOVER`. A saved transaction ID and preselected target session ID make restart recovery reuse the same identity.
 
 ## Installation
 
-Requires Node.js, pnpm, and a DSH `0.1.7-rc.1` runtime. Clone the repository, then run:
+Requires Node.js `^22.19.0 || >=24.0.0`, pnpm, and a DSH `0.2.0-rc.1` or `0.2.0-rc.2` runtime. Clone the repository, then run:
 
 ```powershell
 git clone https://github.com/terryvanke/dsh-session-rollover.git
 cd dsh-session-rollover
-pnpm install
+pnpm install --frozen-lockfile
 pnpm run build
 dsh plugin --profile web add .
 ```
@@ -55,8 +55,8 @@ The bundle enables the plugin with defaults. Override its row in the profile's `
 | `context.reserveOutputTokens` | `32000` | Fallback output reserve |
 | `context.safetyTokens` | `24000` | Checkpoint and provider headroom |
 | `checkpoint.maxTokens` | `8192` | LLM checkpoint output cap |
-| `checkpoint.includeRecentMessages` | `12` | Deterministic recent user messages |
-| `checkpoint.includeToolResults` | `8` | Deterministic recent tool results |
+| `checkpoint.includeRecentMessages` | `12` | Deterministic recent user messages; `0` omits them |
+| `checkpoint.includeToolResults` | `8` | Deterministic recent tool results; `0` omits them |
 | `checkpoint.retries` | `3` | LLM checkpoint retries |
 | `rollover.maxRollovers` | `100` | Chain cap |
 | `rollover.minIntervalSeconds` | `60` | Soft-rollover spacing; hard/overflow override it |
@@ -79,11 +79,11 @@ Keep `@deepseek-ai/dsh-compaction-basic` mounted in the Agent preset. It runs at
 
 ## Limitations
 
-- The public DSH `0.1.7-rc.1` API has no stable Web focus or user-toast API; V1 records a structured rollover notice in the host log and does not switch the browser tab automatically.
+- The public DSH `0.2.0-rc.2` API has no stable Web focus or user-toast API; V1 records a structured rollover notice in the host log and does not switch the browser tab automatically.
 - In Web, the public session controller composes the preset and model selection, and the permission preset service restores a named permission preset. Arbitrary custom Agent setup callbacks cannot be cloned; a `custom` permission state fails closed. An in-flight one-shot subagent run cannot be reattached to its parent tool result through the public Agent API; the plugin skips that session type and leaves official compaction in control. Such deployments need a dedicated subagent integration before unattended rollover.
 - The deterministic fallback reads recent events through `Session.snapshotEvents()`, which this DSH version marks deprecated. Migration to `session-query` is planned.
 - Restart recovery guarantees a stable target session ID. A crash after enqueueing continuation but before recording completion can re-enqueue the continuation. The filesystem check reduces duplicate work, but an exactly-once continuation queue requires a host-level transaction API.
-- The included E2E test uses a fake Agent and token pressure. It does not call a live GLM model.
+- E2E coverage includes the real Cordis runtime, Agent loop, Session store, and token meter with a scripted local model adapter, plus a simulated multi-session chain. It does not call a live GLM model.
 
 ## Troubleshooting
 

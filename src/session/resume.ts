@@ -20,5 +20,6 @@ export function resumeFromCheckpoint(agent: Agent, checkpoint: Checkpoint, claim
     else if (autoResume) agent.followup(message);
     else agent.send(message, 'next-turn', false);
   }
-  if (autoResume) agent.followup(rolloverMessage('Continue the unfinished task from the checkpoint. First verify the current workspace state, then execute the Next Action. Do not restart completed work.'));
+  if (autoResume && !claimed.some((message) => message.source.kind === 'user'))
+    agent.followup(rolloverMessage('Continue the unfinished task from the checkpoint. First verify the current workspace state, then execute the Next Action. Do not restart completed work.'));
 }

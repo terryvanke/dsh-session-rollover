@@ -20,8 +20,8 @@ export async function fallbackCheckpoint(
   const events = agent.session.snapshotEvents();
   const messages = events.filter((event) => event.type === 'user/message').map((event) => textOf(event.data)).filter(Boolean);
   const toolResults = events.filter((event) => event.type === 'tool/result').map((event) => JSON.stringify(event.data).slice(0, 4000));
-  const recentMessages = messages.slice(-config.checkpoint.includeRecentMessages);
-  const recentToolResults = toolResults.slice(-config.checkpoint.includeToolResults);
+  const recentMessages = config.checkpoint.includeRecentMessages ? messages.slice(-config.checkpoint.includeRecentMessages) : [];
+  const recentToolResults = config.checkpoint.includeToolResults ? toolResults.slice(-config.checkpoint.includeToolResults) : [];
   const direct = events.filter((event) => event.type === 'user/message' &&
     (event.data as UserMessage).source.kind === 'user').map((event) => textOf(event.data)).filter(Boolean);
   const originalGoal = direct[0] ?? claimed.map(textOf).filter(Boolean)[0] ?? messages[0] ?? 'Original goal unavailable; inspect the previous session and workspace.';
