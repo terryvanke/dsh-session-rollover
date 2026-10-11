@@ -9,7 +9,7 @@ export interface Checkpoint {
   newSessionId: string;
   createdAt: string;
   task: {originalGoal: string; currentGoal: string; status: string};
-  workspace: {cwd: string; branch: string; gitStatus: string; diffStat: string};
+  workspace: {cwd: string; originalCwd?: string; branch: string; gitStatus: string; diffStat: string};
   files: {modified: string[]; created: string[]; deleted: string[]};
   progress: {completed: string[]; pending: string[]; current: string};
   errors: string[];

@@ -61,7 +61,7 @@ export function apply(ctx: Context, supplied: Partial<RolloverConfig> = {}): voi
   });
   ctx.on('agent/request-error', async ({agent, failure, signal}, next) => {
     if (signal.aborted || agent.session.header.origin === 'subagent' || !config.fallback.rolloverOnContextOverflow || !isContextOverflow(failure.code, failure.message)) return next();
-    await manager.rollover(agent, [], `${failure.code}: ${failure.message}`, true);
+    if (await manager.rollover(agent, [], `${failure.code}: ${failure.message}`, true)) return undefined;
     return next();
   });
   ctx.on('agent/request', async ({agent}, next) => {

@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "session-rollover": {
+      "command": "node",
+      "args": [
+        "C:/path/to/dsh-session-rollover/dist/mcp/cli.js",
+        "--workspace",
+        "C:/path/to/your-project"
+      ]
+    }
+  }
+}

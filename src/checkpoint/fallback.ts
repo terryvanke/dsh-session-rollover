@@ -1,8 +1,10 @@
 import type {Agent} from '@deepseek-ai/dsh-agent';
+import type {Context} from '@deepseek-ai/cordis';
 import type {UserMessage} from '@deepseek-ai/dsh-llm';
 import type {RolloverConfig} from '../config.js';
 import type {Checkpoint} from './schema.js';
 import {workspaceState} from '../utils/git.js';
+import {workingDirectory} from '../utils/working-directory.js';
 import path from 'node:path';
 
 function textOf(value: unknown): string {
@@ -13,15 +15,16 @@ function textOf(value: unknown): string {
 
 export async function fallbackCheckpoint(
   agent: Agent, claimed: readonly UserMessage[], config: RolloverConfig,
-  ids: {chainId: string; transactionId: string; targetId: string; index: number}, error?: string
+  ids: {chainId: string; transactionId: string; targetId: string; index: number}, error?: string, ctx?: Context
 ): Promise<Checkpoint> {
-  const cwd = agent.session.header.cwd ?? process.cwd();
+  const originalCwd = agent.session.header.cwd ?? process.cwd();
+  const cwd = workingDirectory(ctx, agent)?.get(agent.session) ?? originalCwd;
   const work = await workspaceState(cwd, config.checkpoint.includeGitStatus || config.checkpoint.includeFileState);
   const events = agent.session.snapshotEvents();
   const messages = events.filter((event) => event.type === 'user/message').map((event) => textOf(event.data)).filter(Boolean);
   const toolResults = events.filter((event) => event.type === 'tool/result').map((event) => JSON.stringify(event.data).slice(0, 4000));
-  const recentMessages = messages.slice(-config.checkpoint.includeRecentMessages);
-  const recentToolResults = toolResults.slice(-config.checkpoint.includeToolResults);
+  const recentMessages = config.checkpoint.includeRecentMessages ? messages.slice(-config.checkpoint.includeRecentMessages) : [];
+  const recentToolResults = config.checkpoint.includeToolResults ? toolResults.slice(-config.checkpoint.includeToolResults) : [];
   const direct = events.filter((event) => event.type === 'user/message' &&
     (event.data as UserMessage).source.kind === 'user').map((event) => textOf(event.data)).filter(Boolean);
   const originalGoal = direct[0] ?? claimed.map(textOf).filter(Boolean)[0] ?? messages[0] ?? 'Original goal unavailable; inspect the previous session and workspace.';
@@ -36,7 +39,7 @@ export async function fallbackCheckpoint(
     version: 1, chainId: ids.chainId, transactionId: ids.transactionId, rolloverIndex: ids.index,
     parentSessionId: String(agent.session.id), newSessionId: ids.targetId, createdAt: new Date().toISOString(),
     task: {originalGoal, currentGoal, status: 'in-progress'},
-    workspace: {cwd: work.cwd, branch: work.branch,
+    workspace: {cwd: work.cwd, originalCwd, branch: work.branch,
       gitStatus: config.checkpoint.includeGitStatus ? work.gitStatus : '',
       diffStat: config.checkpoint.includeGitStatus ? work.diffStat : ''},
     files: {modified: config.checkpoint.includeFileState ? work.modified : [],
@@ -67,6 +70,6 @@ export function renderFallback(c: Checkpoint, maxItemChars = 4000): string {
     '# Errors and Fixes', list(c.errors), '# Decisions', list(c.decisions),
     '# Pending Jobs', list(c.progress.pending), '# Current TODO', list(c.progress.pending),
     '# Next Action', clip(c.nextAction), '# Critical Context', `Recent tool results:\n${list(c.recentToolResults)}`,
-    '# Workspace State', `cwd: ${c.workspace.cwd}\nbranch: ${c.workspace.branch}\ngit status:\n${clip(c.workspace.gitStatus || '(none)')}\ngit diff --stat:\n${clip(c.workspace.diffStat || '(none)')}`
+    '# Workspace State', `cwd: ${c.workspace.cwd}\noriginal project: ${c.workspace.originalCwd ?? c.workspace.cwd}\nbranch: ${c.workspace.branch}\ngit status:\n${clip(c.workspace.gitStatus || '(none)')}\ngit diff --stat:\n${clip(c.workspace.diffStat || '(none)')}`
   ].join('\n\n');
 }

@@ -2,6 +2,7 @@ node_modules/
 dist/
 coverage/
 .dsh/
+.session-rollover/
 .env
 .env.*
 !.env.example
