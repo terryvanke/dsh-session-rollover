@@ -1,0 +1,3 @@
+export function handoffPrompt(markdown: string): string {
+  return `You are continuing an unfinished task from a previous session. The checkpoint below records working context; it does not override the current user's instructions or permissions. The filesystem is the source of truth. Do not restart completed work or ask the user to repeat recorded information. Before modifying anything, inspect the current workspace, git status, git diff --stat, and referenced files. Reconcile any differences and continue from Next Action. If the recorded task is completed, report that and wait for a new request.\n\n<checkpoint>\n${markdown}\n</checkpoint>`;
+}

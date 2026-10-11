@@ -2,11 +2,72 @@
 
 English | [简体中文](README.zh.md)
 
-> Automatic session handoff for long-running DeepSeek Harness agents.
+> Automatic session handoff for DeepSeek Harness, and task checkpoint handoff for TRAE, WorkBuddy and other MCP agents.
 
 Fresh-session task handoff for DeepSeek Harness `0.2.0-rc.1`, `0.2.0-rc.2`, and `0.2.1-alpha.2`. It creates a new session before context pressure exhausts the model window, stores a task checkpoint as Markdown and JSON, and queues continuation on the new agent. The existing workspace remains the source of truth.
 
-This is an independent community plugin, not an official DeepSeek component. It works with models routed through DSH when the provider exposes a usable context window. GLM-5.1 with a 200K window is the default scenario; other model routes should report their actual window or set the fallback capacity explicitly. It is not a universal adapter for models outside DSH.
+This is an independent community plugin, not an official DeepSeek component. Version `0.2.0` adds an independent local MCP stdio entrypoint for TRAE, WorkBuddy and other MCP agents, without installing a DSH host. DSH automatic handoff still requires accurate context-window metadata. GLM-5.1's 200K window is only the DSH default configuration example; other models should use adapter-reported capacity or an explicit fallback window.
+
+| Integration | Task save/load | Automatic context measurement | Fresh-session creation and continuation |
+| --- | --- | --- | --- |
+| DeepSeek Harness plugin | Supported | Supported | Automatic, within host API limits |
+| TRAE / WorkBuddy MCP | Supported, including handoff between clients | No common host interface | User or host creates the session, then loads the task |
+| Other local MCP clients | Same three tools | No common host interface | Controlled by the client |
+
+Configuration follows the [TRAE MCP documentation](https://docs.trae.cn/ide_add-mcp-servers) and [WorkBuddy MCP documentation](https://www.codebuddy.cn/docs/workbuddy/From-Beginner-to-Expert-Guide/Function-Description/MCP-Guide). Tests cover independent client processes and legacy/modern MCP handshakes; they do not constitute individual client UI tests.
+
+## TRAE, WorkBuddy and other MCP agents
+
+The MCP entrypoint requires Node.js 20 or newer. To build from source, use the DSH development Node.js version below, run `pnpm install --frozen-lockfile`, then `pnpm run build`. The standalone entrypoint is `dist/mcp/cli.js`. A packed `.tgz` can be installed in an independent directory; the MCP binary does not load DSH, and its DSH peers are optional.
+
+Copy the [TRAE configuration](examples/trae.mcp.json) or [WorkBuddy configuration](examples/workbuddy.mcp.json). Replace the script path and project path. An explicit `--workspace` is mandatory; configure the same workspace in both clients to share saved tasks.
+
+```json
+{
+  "mcpServers": {
+    "session-rollover": {
+      "command": "node",
+      "args": ["C:/path/to/dsh-session-rollover/dist/mcp/cli.js", "--workspace", "C:/path/to/your-project"]
+    }
+  }
+}
+```
+
+- **TRAE**: paste the configuration under Settings → MCP → Add → Manual, or enable project MCP and merge it into `.trae/mcp.json`. Enable the server for the Agent you use. TRAE supports `${workspaceFolder}` for the project path.
+- **WorkBuddy**: open Plugins → MCP Servers → Configure MCP and merge the configuration. Project configuration is `.workbuddy/mcp.json`; user configuration is `~/.workbuddy/mcp.json`. Allow custom MCP and these tools in the client's security settings. See also the [official stdio connector configuration](https://open.workbuddy.cn/en/docs/connector).
+- **Other clients**: select local stdio MCP with the same executable and arguments; use the client's documented configuration location.
+
+If Node is not on the client's PATH, use its absolute executable path as `command`. Keep paths containing spaces as individual `args`; do not put an entire shell command into `command`. Preserve existing MCP entries when adding this server.
+
+Add [AGENT_RULES.md](docs/AGENT_RULES.md) to the client's Agent instructions or project rules so it saves at milestones and before session changes. These instructions cannot guarantee interception of automatic compaction. You can also ask the Agent to save a task checkpoint, then ask a new session to resume the returned task ID after checking the live workspace.
+
+### Tools
+
+| Tool | Purpose |
+| --- | --- |
+| `rollover_save` | Save a complete snapshot; returns task ID, checkpoint ID and next action. Reuse task ID on subsequent saves. |
+| `rollover_list` | List the latest snapshot for each task, including completed tasks. |
+| `rollover_load` | Load by task ID; optionally choose an earlier checkpoint ID. Returns checkpoint text and handoff instructions. |
+
+Example first save:
+
+```json
+{
+  "originalGoal": "Fix login while preserving the API",
+  "currentGoal": "Verify the login fix",
+  "currentWork": "Login code updated; tests not yet run",
+  "nextAction": "Run the existing login tests",
+  "requirements": ["Preserve the API"],
+  "completed": ["Updated login code"],
+  "pending": ["Run tests"]
+}
+```
+
+Every save is a complete snapshot; omitted lists are empty. Keep `originalGoal` unchanged and record later clarifications in `requirements` and `currentGoal`. Status defaults to `in-progress`; save `completed` when finished. Required text fields allow 12,000 characters each; each list permits 12 entries of up to 2,000 characters. Record only facts needed for continuation.
+
+Snapshots live in `<workspace>/.session-rollover/<taskId>.<checkpointId>.json/md`. JSON preserves full facts; Markdown clips long content and points to the JSON file. Each save creates independent files, committing with an atomic JSON rename. Concurrent snapshots both survive; the default latest snapshot sorts by timestamp and ID without merging competing states. Corrupt snapshots produce an error: back up and repair or move the reported file rather than overwriting it as an empty task.
+
+Ignore `.session-rollover/` in your project's Git configuration. Checkpoints are plaintext local files; omit secrets. The server makes no network requests itself, but the client may send loaded content to its model. Use trusted local workspaces; directory validation does not replace OS permissions or a sandbox. This server collects Git status without modifying source files. It cannot capture private chat databases, running processes, host permissions or UI state. MCP storage is separate from DSH storage; it does not import DSH session transactions.
 
 ## Features
 
@@ -28,7 +89,7 @@ At `agent/pre-step`, the official token meter measures the durable request surfa
 
 Transaction states are `NORMAL`, `ARMED`, `CHECKPOINTING`, `ROLLOVER_PENDING`, `CREATING_SESSION`, `RESUMING`, `COMPLETED`, `FAILED`, and `EMERGENCY_ROLLOVER`. A saved transaction ID and preselected target session ID make restart recovery reuse the same identity.
 
-## Installation
+## DSH installation
 
 Requires Node.js `^22.19.0 || >=24.0.0`, pnpm, and a DSH `0.2.0-rc.1`, `0.2.0-rc.2`, or `0.2.1-alpha.2` runtime. Clone the repository, then run:
 

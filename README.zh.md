@@ -2,11 +2,72 @@
 
 [English](README.md) | 简体中文
 
-> 为长时间运行的 DeepSeek Harness Agent 自动接力到新 Session。
+> DeepSeek Harness 自动会话接力，以及 TRAE、WorkBuddy 等 MCP Agent 的任务检查点接力。
 
 适配 DeepSeek Harness `0.2.0-rc.1`、`0.2.0-rc.2` 和 `0.2.1-alpha.2` 的新 Session 任务接力插件。它在上下文耗尽之前创建全新 Session，保存 Markdown 与 JSON Checkpoint，并让新 Agent 自动继续任务。恢复时以实际文件系统为准。
 
-这是独立的社区插件，并非 DeepSeek 官方组件。它适用于通过 DSH 接入、能提供准确上下文窗口信息的模型。GLM-5.1 的 200K 窗口只是默认配置场景；使用其他模型时，应让 Provider 报告实际窗口，或显式设置回退窗口值。插件不能直接用于 DSH 以外的所有模型运行时。
+这是独立的社区插件，并非 DeepSeek 官方组件。`0.2.0` 新增独立 MCP stdio 服务，不需要安装 DSH 宿主，即可在 TRAE、WorkBuddy 及其他支持本地 MCP 的 Agent 中保存和恢复任务。DSH 自动接力仍适用于能提供准确上下文窗口信息的模型。GLM-5.1 的 200K 窗口只是 DSH 的默认配置场景；使用其他模型时，应让 Provider 报告实际窗口，或显式设置回退窗口值。
+
+| 接入方式 | 保存与恢复任务 | 自动监测上下文 | 自动创建新会话并续跑 |
+| --- | --- | --- | --- |
+| DeepSeek Harness 插件 | 支持 | 支持 | 支持，受宿主 API 限制 |
+| TRAE / WorkBuddy 的 MCP | 支持，也可在两者间接力 | 无通用接口 | 由用户或客户端创建会话，再加载任务 |
+| 其他本地 MCP 客户端 | 使用相同三个工具 | 无通用接口 | 由客户端控制 |
+
+接入方式依据[TRAE 官方 MCP 文档](https://docs.trae.cn/ide_add-mcp-servers)和[WorkBuddy 官方 MCP 文档](https://www.codebuddy.cn/docs/workbuddy/From-Beginner-to-Expert-Guide/Function-Description/MCP-Guide)。协议测试覆盖独立客户端进程和新旧 MCP 握手；不等同于逐一实测客户端界面。
+
+## TRAE、WorkBuddy 和其他 MCP Agent
+
+MCP 服务运行需要 Node.js 20 或更新版本。源码构建使用下文 DSH 开发环境的 Node.js 版本，执行 `pnpm install --frozen-lockfile` 和 `pnpm run build`；独立入口为 `dist/mcp/cli.js`。已打包的 `.tgz` 可安装到独立目录，MCP 入口无需加载 DSH，DSH peer dependencies 对此入口是可选的。
+
+复制对应配置：[TRAE](examples/trae.mcp.json)、[WorkBuddy](examples/workbuddy.mcp.json)。将示例中的两个路径分别改成插件目录和需要接力的项目目录。必须显式设置 `--workspace`，避免误用客户端的启动目录；两个客户端使用相同目录才能共享任务。
+
+```json
+{
+  "mcpServers": {
+    "session-rollover": {
+      "command": "node",
+      "args": ["E:/GitHub/dsh-session-rollover/dist/mcp/cli.js", "--workspace", "E:/Projects/my-project"]
+    }
+  }
+}
+```
+
+- **TRAE**：在「设置 → MCP → 添加 → 手动添加」粘贴配置，也可启用项目级 MCP 后合并到 `.trae/mcp.json`。在使用的智能体中启用该服务。TRAE 支持 `${workspaceFolder}`，可用于代替项目目录。
+- **WorkBuddy**：在「插件 → MCP 服务器 → 配置 MCP」合并配置；项目级文件为 `<项目>/.workbuddy/mcp.json`，用户级文件为 `~/.workbuddy/mcp.json`。需要允许自定义 MCP 和对应工具。stdio 配置也见[官方连接器开发文档](https://open.workbuddy.cn/en/docs/connector)。
+- **其他客户端**：选择本地 stdio MCP，使用同样的命令和参数；配置文件位置以客户端文档为准。
+
+`node` 必须在客户端的 PATH 中，否则将 `command` 改为 Node 可执行文件的绝对路径。带空格的项目或脚本路径各占一个 `args` 元素，不能把完整命令塞进 `command`。保留已有 MCP 配置，仅增加 `session-rollover` 条目。
+
+将 [AGENT_RULES.md](docs/AGENT_RULES.md) 放入客户端的 Agent 指令或项目规则，使 Agent 在里程碑和换会话前调用保存工具。规则不能保证拦截客户端的自动压缩。也可以直接说「保存当前任务检查点」；新会话说「恢复任务 `<taskId>`，先检查工作区再继续」。
+
+### 三个工具
+
+| 工具 | 用途 |
+| --- | --- |
+| `rollover_save` | 保存完整任务快照，返回 `taskId`、`checkpointId` 和下一步；后续保存复用 `taskId` |
+| `rollover_list` | 列出每个任务的最新快照，包括已完成任务 |
+| `rollover_load` | 按 `taskId` 恢复；可用 `checkpointId` 指定历史快照，返回检查点和接力指令 |
+
+首次保存示例：
+
+```json
+{
+  "originalGoal": "修复登录问题，保留现有接口",
+  "currentGoal": "验证登录修复",
+  "currentWork": "已修改登录逻辑，尚未运行测试",
+  "nextAction": "运行现有登录测试",
+  "requirements": ["保留现有接口"],
+  "completed": ["修改登录逻辑"],
+  "pending": ["运行测试"]
+}
+```
+
+每次保存都是完整快照，省略的列表为空；`originalGoal` 必须保持原值，后续用户要求记录在 `requirements` 和 `currentGoal`。`status` 默认为 `in-progress`，完成时设为 `completed`。四个必填文本字段最长各 12,000 字符；列表最多各 12 项，每项 2,000 字符。请只保留接力所需事实。
+
+MCP 快照保存为 `<workspace>/.session-rollover/<taskId>.<checkpointId>.json/md`。JSON 保存完整事实，Markdown 会缩短长内容并指出完整 JSON 文件。每次写入独立文件，JSON 的原子重命名表示保存成功，旧快照不被覆盖。同时保存的两个快照均保留，默认按保存时间及 ID 选最新一份，不自动合并分歧。损坏快照会明确报错，应先备份并修复或移走报错文件，不能当作空任务覆盖。
+
+将 `.session-rollover/` 加入实际项目的 `.gitignore`。检查点是本地明文，不要保存密钥；服务不主动联网，但客户端可能将恢复内容发送给其模型。目录必须是受信任的本地项目，目录检查不替代操作系统权限或沙箱。服务只采集 Git 状态，不修改源码；它不保存私有聊天数据库、后台进程、模型权限或客户端 UI。MCP 和 DSH 使用各自的存储目录；MCP 不直接导入 DSH Session 事务。
 
 ## 功能亮点
 
@@ -24,7 +85,7 @@
 
 状态包括 `NORMAL`、`ARMED`、`CHECKPOINTING`、`ROLLOVER_PENDING`、`CREATING_SESSION`、`RESUMING`、`COMPLETED`、`FAILED`、`EMERGENCY_ROLLOVER`。Session 锁、事务 ID 和预先生成的目标 ID 用于避免重复创建。
 
-## 安装与启用
+## DSH 安装与启用
 
 需要 Node.js `^22.19.0 || >=24.0.0`、pnpm 和 DSH `0.2.0-rc.1`、`0.2.0-rc.2` 或 `0.2.1-alpha.2`。克隆仓库后运行：
 
