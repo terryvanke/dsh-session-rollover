@@ -4,7 +4,7 @@ English | [简体中文](README.zh.md)
 
 > Automatic session handoff for long-running DeepSeek Harness agents.
 
-Fresh-session task handoff for DeepSeek Harness `0.2.0-rc.1` and `0.2.0-rc.2`. It creates a new session before context pressure exhausts the model window, stores a task checkpoint as Markdown and JSON, and queues continuation on the new agent. The existing workspace remains the source of truth.
+Fresh-session task handoff for DeepSeek Harness `0.2.0-rc.1`, `0.2.0-rc.2`, and `0.2.1-alpha.2`. It creates a new session before context pressure exhausts the model window, stores a task checkpoint as Markdown and JSON, and queues continuation on the new agent. The existing workspace remains the source of truth.
 
 This is an independent community plugin, not an official DeepSeek component. It works with models routed through DSH when the provider exposes a usable context window. GLM-5.1 with a 200K window is the default scenario; other model routes should report their actual window or set the fallback capacity explicitly. It is not a universal adapter for models outside DSH.
 
@@ -12,7 +12,7 @@ This is an independent community plugin, not an official DeepSeek component. It 
 
 - Checks token pressure before each agent request and hands off before the configured hard limit.
 - Writes durable Markdown and JSON checkpoints and resumes in a fresh session without copying old chat history.
-- Preserves the workspace, selected model, and named permission preset where the host API supports them.
+- Preserves the original project, current working directory, selected model, and named permission preset where the host API supports them.
 - Recovers interrupted rollover transactions after restart and cooperates with official compaction.
 - Falls back to a deterministic checkpoint if optional LLM refinement fails.
 
@@ -30,7 +30,7 @@ Transaction states are `NORMAL`, `ARMED`, `CHECKPOINTING`, `ROLLOVER_PENDING`, `
 
 ## Installation
 
-Requires Node.js `^22.19.0 || >=24.0.0`, pnpm, and a DSH `0.2.0-rc.1` or `0.2.0-rc.2` runtime. Clone the repository, then run:
+Requires Node.js `^22.19.0 || >=24.0.0`, pnpm, and a DSH `0.2.0-rc.1`, `0.2.0-rc.2`, or `0.2.1-alpha.2` runtime. Clone the repository, then run:
 
 ```powershell
 git clone https://github.com/terryvanke/dsh-session-rollover.git
@@ -73,17 +73,21 @@ Keep the defaults for a 200,000-token route. The hard limit is 144,000 tokens wi
 
 Each workspace writes `.dsh/rollover/<chain-id>/chain.json`, plus `session-001.md` and `session-001.json`, etc. JSON stores lineage, original/current task, workspace state, files, progress, errors, decisions, the next action, and route metadata. Markdown is the model-facing handoff. Files are written to a temporary file, synced, and renamed. On restart, incomplete chain transactions are inspected; the stored target ID is resumed if persisted or created once if absent. The new agent is told to verify `git status`, `git diff --stat`, and referenced files before editing.
 
+On `0.2.1-alpha.2`, checkpoints capture the effective directory through the optional `workingDirectory` service. The new session retains the original project in its header and restores named permissions before setting its current directory. Checkpoint storage stays under the original project so restart recovery can find it. Earlier checkpoints without `originalCwd` remain readable.
+
 ## Compaction compatibility
 
 Keep `@deepseek-ai/dsh-compaction-basic` mounted in the Agent preset. It runs at `agent/pre-step`, uses `ctx.tokenMeter`, and defaults to a 0.8 ratio capped by the model window minus routed output tokens and its 65,536-token headroom. On a 200K route this cap can make compaction run before rollover. The backend has its own bounded context-overflow recovery. This plugin observes completed compaction events for optional soft rollover; its hard safety threshold always wins.
 
 ## Limitations
 
-- The public DSH `0.2.0-rc.2` API has no stable Web focus or user-toast API; V1 records a structured rollover notice in the host log and does not switch the browser tab automatically.
+- The plugin records a structured rollover notice in the host log and does not switch the browser tab automatically.
 - In Web, the public session controller composes the preset and model selection, and the permission preset service restores a named permission preset. Arbitrary custom Agent setup callbacks cannot be cloned; a `custom` permission state fails closed. An in-flight one-shot subagent run cannot be reattached to its parent tool result through the public Agent API; the plugin skips that session type and leaves official compaction in control. Such deployments need a dedicated subagent integration before unattended rollover.
 - The deterministic fallback reads recent events through `Session.snapshotEvents()`, which this DSH version marks deprecated. Migration to `session-query` is planned.
 - Restart recovery guarantees a stable target session ID. A crash after enqueueing continuation but before recording completion can re-enqueue the continuation. The filesystem check reduces duplicate work, but an exactly-once continuation queue requires a host-level transaction API.
 - E2E coverage includes the real Cordis runtime, Agent loop, Session store, and token meter with a scripted local model adapter, plus a simulated multi-session chain. It does not call a live GLM model.
+
+Development dependencies and the lockfile target `0.2.1-alpha.2`. Compatibility checks also cover `0.2.0-rc.1` and `0.2.0-rc.2`; alpha releases remain upstream preview builds.
 
 ## Troubleshooting
 

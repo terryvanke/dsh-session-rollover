@@ -1,10 +1,12 @@
-import {afterEach, describe, expect, it} from 'vitest';
+import {afterEach, describe, expect, it, vi} from 'vitest';
 import {fixture, config} from './helpers.js';
 import {RolloverManager} from '../src/rollover-manager.js';
 import {apply} from '../src/index.js';
 import type {Context} from '@deepseek-ai/cordis';
 import {CheckpointStore} from '../src/storage/store.js';
 import path from 'node:path';
+import {mkdir, writeFile} from 'node:fs/promises';
+import {execFileSync} from 'node:child_process';
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));});
@@ -35,6 +37,41 @@ describe('rollover transaction', () => {
     expect(f.calls.clear).toBe(0);
     expect(manager.successor('A')).toBeUndefined();
   });
+  it.each([false, true])('preserves a changed working directory without changing the original project (web=%s)', async (web) => {
+    const f = await fixture(); cleanups.push(f.cleanup);
+    const cwd = path.join(f.cwd, 'selected');
+    await mkdir(cwd);
+    execFileSync('git', ['-C', cwd, 'init'], {stdio: 'ignore'});
+    await writeFile(path.join(cwd, 'current.txt'), 'current directory');
+    const {agent} = f.makeAgent('A');
+    const directory = {get: () => cwd, set: vi.fn(async () => cwd)};
+    const permission = vi.fn();
+    const requests: Array<{cwd?: string}> = [];
+    const create = async (request: {sessionId: string; meta?: {cwd?: string}}) => {
+      requests.push(request.meta ?? {});
+      return {agent: f.makeAgent(request.sessionId).agent};
+    };
+    const controller = {create: async (request: {sessionId: string; cwd?: string}) => {
+      requests.push(request);
+      f.makeAgent(request.sessionId);
+      return {sessionId: request.sessionId};
+    }, selectModel: async () => undefined};
+    const ctx = {...f.ctx, agents: {...f.ctx.agents, create}, get: (name: string) =>
+      name === 'workingDirectory' ? directory : name === 'sessionController' && web ? controller :
+        name === 'permissionPresets' ? {current: () => 'workspace-write', set: permission} : undefined} as unknown as Context;
+    const manager = new RolloverManager(ctx, config());
+    expect(await manager.rollover(agent)).toBe(true);
+    expect(requests).toEqual([expect.objectContaining({cwd: f.cwd})]);
+    const target = f.agents.get(manager.successor('A')!)!;
+    expect(directory.set).toHaveBeenCalledWith(target, cwd);
+    expect(permission.mock.invocationCallOrder[0]).toBeLessThan(directory.set.mock.invocationCallOrder[0]);
+    const store = new CheckpointStore(path.join(f.cwd, '.dsh', 'rollover'));
+    const [chain] = await store.listChains();
+    const checkpoint = await store.loadCheckpoint(chain.chainId, 1);
+    expect(checkpoint?.workspace).toMatchObject({cwd, originalCwd: f.cwd});
+    expect(checkpoint?.files.created).toEqual(['current.txt']);
+    expect(checkpoint?.nextAction).toContain(path.join(cwd, 'current.txt'));
+  });
   it('rejects an old-session model step at the hard limit', async () => {
     const f = await fixture(); cleanups.push(f.cleanup);
     const {agent} = f.makeAgent('A');
@@ -49,6 +86,16 @@ describe('rollover transaction', () => {
       async () => ({kind: 'enter', messages: []}));
     expect(result).toEqual({kind: 'reject'});
     expect(f.calls.create).toBe(1);
+  });
+  it('keeps the old session usable when restoring its working directory fails', async () => {
+    const f = await fixture(); cleanups.push(f.cleanup);
+    const {agent} = f.makeAgent('A');
+    const directory = {get: () => f.cwd, set: async () => {throw new Error('directory unavailable');}};
+    const ctx = {...f.ctx, get: (name: string) => name === 'workingDirectory' ? directory : undefined} as unknown as Context;
+    const manager = new RolloverManager(ctx, config());
+    expect(await manager.rollover(agent)).toBe(false);
+    expect(f.calls.clear).toBe(0);
+    expect(manager.successor('A')).toBeUndefined();
   });
   it.each([false, true])('delegates overflow retries only when rollover fails (failure=%s)', async (failCreate) => {
     const f = await fixture(); cleanups.push(f.cleanup);

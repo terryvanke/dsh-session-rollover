@@ -4,7 +4,7 @@
 
 > 为长时间运行的 DeepSeek Harness Agent 自动接力到新 Session。
 
-适配 DeepSeek Harness `0.2.0-rc.1` 和 `0.2.0-rc.2` 的新 Session 任务接力插件。它在上下文耗尽之前创建全新 Session，保存 Markdown 与 JSON Checkpoint，并让新 Agent 自动继续任务。恢复时以实际文件系统为准。
+适配 DeepSeek Harness `0.2.0-rc.1`、`0.2.0-rc.2` 和 `0.2.1-alpha.2` 的新 Session 任务接力插件。它在上下文耗尽之前创建全新 Session，保存 Markdown 与 JSON Checkpoint，并让新 Agent 自动继续任务。恢复时以实际文件系统为准。
 
 这是独立的社区插件，并非 DeepSeek 官方组件。它适用于通过 DSH 接入、能提供准确上下文窗口信息的模型。GLM-5.1 的 200K 窗口只是默认配置场景；使用其他模型时，应让 Provider 报告实际窗口，或显式设置回退窗口值。插件不能直接用于 DSH 以外的所有模型运行时。
 
@@ -12,7 +12,7 @@
 
 - 每次 Agent 请求前检查 token 压力，到硬阈值前自动接力。
 - 持久保存 Markdown 与 JSON Checkpoint，在不复制旧聊天历史的新 Session 中继续任务。
-- 在宿主 API 支持的范围内保留工作区、模型选择与具名权限预设。
+- 在宿主 API 支持的范围内保留原始项目、当前工作目录、模型选择与具名权限预设。
 - 进程重启后恢复未完成的接力事务，并与官方 compaction 协同。
 - LLM 补充 Checkpoint 失败时，使用确定性回退内容。
 
@@ -26,7 +26,7 @@
 
 ## 安装与启用
 
-需要 Node.js `^22.19.0 || >=24.0.0`、pnpm 和 DSH `0.2.0-rc.1` 或 `0.2.0-rc.2`。克隆仓库后运行：
+需要 Node.js `^22.19.0 || >=24.0.0`、pnpm 和 DSH `0.2.0-rc.1`、`0.2.0-rc.2` 或 `0.2.1-alpha.2`。克隆仓库后运行：
 
 ```powershell
 git clone https://github.com/terryvanke/dsh-session-rollover.git
@@ -46,6 +46,8 @@ dsh plugin --profile web add .
 
 默认写入 `<workspace>/.dsh/rollover/<chain-id>/chain.json`，以及 `session-001.md/json` 等文件。Markdown 面向新模型；JSON 保存 Session 链、任务、文件、错误、决策和唯一下一步。采用临时文件、文件同步、重命名写入。进程重启后检查未完成事务，并复用预定目标 ID；已持久化的 Session 通过 `ctx.agents.resume()` 恢复。新 Agent 先检查 `git status`、`git diff --stat` 和关键文件，再执行下一步。转交的用户消息会直接触发续跑，不再额外排队一次合成续跑消息；溢出接力成功后，旧 Session 不再重试模型请求。
 
+在 `0.2.1-alpha.2` 中，通过可选的 `workingDirectory` 服务读取当前执行目录。新 Session 的 header 保留原始项目，恢复具名权限后再设置当前工作目录；Checkpoint 仍存储在原始项目下，便于重启恢复。没有 `originalCwd` 字段的旧 Checkpoint 仍可读取。
+
 ## 与官方 Compaction 协同
 
 保留 Agent 预设中的 `@deepseek-ai/dsh-compaction-basic`。官方实现的默认比例为 80%，但有效阈值还受模型输出预留及默认 65,536 tokens headroom 限制，因此 200K 模型可能在 rollover 之前压缩。它还会对规范化上下文溢出错误有限重试。本插件可按 `rolloverAfterCompactions` 计数在软阈值接力；硬阈值始终优先。
@@ -58,6 +60,8 @@ dsh plugin --profile web add .
 - 重启能避免重复创建目标 Session；极端时序下可能重复排队一次 continuation。新 Agent 必须核对真实文件状态。
 - E2E 测试覆盖真实 Cordis、Agent 循环、Session 存储和 token meter，模型响应由本地测试适配器提供；另有模拟多 Session 接力测试，不调用真实 GLM。
 - 如出现 `patch: entry ... not found`，检查 Web profile 的旧补丁 ID；如插件未激活，检查 `dsh.bundle` 和 `--dump-config`。
+
+开发依赖与锁文件使用 `0.2.1-alpha.2`，兼容检查同时覆盖 `0.2.0-rc.1` 和 `0.2.0-rc.2`。Alpha 版本属于上游预览版本。
 
 ## 开发与测试
 

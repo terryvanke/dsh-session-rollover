@@ -9,7 +9,7 @@ const sections = ['Mission','User Requirements','Current Objective','Completed W
 
 export async function generateCheckpoint(ctx: Context, agent: Agent, claimed: readonly UserMessage[], config: RolloverConfig,
   ids: {chainId: string; transactionId: string; targetId: string; index: number}, error?: string, base?: Checkpoint): Promise<Checkpoint> {
-  const fallback = base ?? await fallbackCheckpoint(agent, claimed, config, ids, error);
+  const fallback = base ?? await fallbackCheckpoint(agent, claimed, config, ids, error, ctx);
   if (!config.checkpoint.enabled) return fallback;
   const route = agent.session.requestHeader()?.config ?? agent.options;
   if (!route.provider || !route.model) return fallback;

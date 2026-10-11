@@ -11,6 +11,7 @@ import {generateCheckpoint} from './checkpoint/generator.js';
 import {fallbackCheckpoint} from './checkpoint/fallback.js';
 import {resumeFromCheckpoint} from './session/resume.js';
 import {redactSecrets} from './utils/errors.js';
+import {workingDirectory} from './utils/working-directory.js';
 
 interface WebSessionController {
   create(request: {cwd?: string; sessionId: SessionId; agentPreset?: string}): Promise<{sessionId: SessionId}>;
@@ -97,7 +98,7 @@ export class RolloverManager {
       await this.ctx.sessions.flush(agent.session);
       this.log('generating checkpoint', {chainId: chain.chainId, sourceSessionId: source, rolloverIndex: index});
       const ids = {chainId: chain.chainId, transactionId, targetId, index};
-      const fallback = await fallbackCheckpoint(agent, claimed, this.config, ids, emergencyError);
+      const fallback = await fallbackCheckpoint(agent, claimed, this.config, ids, emergencyError, this.ctx);
       const projections = this.ctx.get('sessionProjections') as {stateOf(session: Agent['session'], key: string): unknown} | undefined;
       const currentPreset = projections?.stateOf(agent.session, 'agentPreset');
       if (typeof currentPreset === 'string') fallback.runtime.agentPreset = currentPreset;
@@ -138,6 +139,7 @@ export class RolloverManager {
   private async createAndResume(chain: Chain, checkpoint: Checkpoint, claimed: readonly UserMessage[], old?: Agent): Promise<Agent | undefined> {
     const store = this.storeForChain(chain);
     const targetId = checkpoint.newSessionId;
+    const originalCwd = checkpoint.workspace.originalCwd ?? checkpoint.workspace.cwd;
     if (!chain.transaction) throw new Error('missing rollover transaction');
     chain.transaction.status = 'CREATING_SESSION';
     await store.saveChain(chain);
@@ -148,7 +150,7 @@ export class RolloverManager {
       const controller = this.ctx.get('sessionController') as WebSessionController | undefined;
       if (controller) {
         await controller.create({sessionId: targetId as SessionId,
-          cwd: this.config.rollover.preserveWorkspace ? checkpoint.workspace.cwd : undefined,
+          cwd: this.config.rollover.preserveWorkspace ? originalCwd : undefined,
           agentPreset: this.config.rollover.preservePermissions ? checkpoint.runtime.agentPreset : undefined});
         target = this.ctx.agents.get(targetId as SessionId);
         if (!target) throw new Error('Web session controller created no live Agent');
@@ -159,7 +161,7 @@ export class RolloverManager {
           target = handle.agent; this.handles.set(targetId, handle);
         } catch {
           const handle = await this.ctx.agents.create({sessionId: targetId as SessionId,
-            meta: {cwd: this.config.rollover.preserveWorkspace ? checkpoint.workspace.cwd : undefined,
+            meta: {cwd: this.config.rollover.preserveWorkspace ? originalCwd : undefined,
               agentPreset: this.config.rollover.preservePermissions ? old?.session.header.agentPreset ?? checkpoint.runtime.agentPreset : undefined},
             agentOptions: this.config.rollover.preserveModel ? old?.options ?? checkpoint.runtime.agentOptions : undefined});
           target = handle.agent; this.handles.set(targetId, handle);
@@ -174,6 +176,12 @@ export class RolloverManager {
     const permissions = this.ctx.get('permissionPresets') as PermissionPresets | undefined;
     if (permissions && this.config.rollover.preservePermissions && checkpoint.runtime.permissionPreset && checkpoint.runtime.permissionPreset !== 'custom')
       permissions.set(target.session, checkpoint.runtime.permissionPreset);
+    if (this.config.rollover.preserveWorkspace) {
+      const directory = workingDirectory(this.ctx, target);
+      if (directory) await directory.set(target, checkpoint.workspace.cwd);
+      else if (checkpoint.workspace.cwd !== originalCwd)
+        throw new Error('current working directory cannot be restored without the workingDirectory service');
+    }
     if (this.config.rollover.preserveModel) this.requestOptions.set(targetId, checkpoint.runtime.agentOptions);
     this.log('session created', {chainId: chain.chainId, targetSessionId: targetId});
     chain.transaction.status = 'RESUMING';

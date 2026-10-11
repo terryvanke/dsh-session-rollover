@@ -14,6 +14,7 @@ it('resumes a checkpoint transaction exactly once after a crash', async () => {
   const store = new CheckpointStore(path.join(f.cwd, '.dsh', 'rollover'));
   const checkpoint = await fallbackCheckpoint(agent, [], config(),
     {chainId: 'chain', transactionId: 'tx', targetId: 'B', index: 1});
+  delete checkpoint.workspace.originalCwd;
   await store.saveCheckpoint(checkpoint);
   await store.saveChain({chainId: 'chain', rootSessionId: 'A', activeSessionId: 'A', sessions: ['A'],
     rolloverCount: 0, taskStatus: 'in-progress', createdAt: checkpoint.createdAt, updatedAt: checkpoint.createdAt,
